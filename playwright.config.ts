@@ -6,7 +6,6 @@ export default defineConfig({
   reporter: 'line',
   use: {
     baseURL: 'http://localhost:4173',
-    channel: 'chrome',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },

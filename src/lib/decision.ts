@@ -35,10 +35,15 @@ export function createOutcomeReview(): OutcomeReview {
 }
 
 export function nextDecisionNumber(decisions: DecisionRecord[]): number {
-  const used = decisions
+  const used = new Set(decisions
     .map((decision) => Number.parseInt(decision.id.replace(/\D/g, ''), 10))
-    .filter(Number.isFinite)
-  return used.length ? Math.max(...used) + 1 : 1
+    .filter((number) => Number.isSafeInteger(number) && number >= 0))
+  let next = 1
+  for (const number of used) next = Math.max(next, number + 1)
+  // Imported IDs may exhaust integer precision; reuse a free low number instead.
+  if (!Number.isSafeInteger(next)) next = 1
+  while (used.has(next)) next++
+  return next
 }
 
 export function createBlankDecision(number: number, now = new Date()): DecisionRecord {
@@ -153,8 +158,17 @@ export function normalizeDecisionRecord(value: Partial<DecisionRecord>, index = 
   const normalizeStrings = (items: unknown, fallbackItems: string[]) => Array.isArray(items)
     ? items.filter((item): item is string => typeof item === 'string')
     : fallbackItems
+  const normalizeItemIds = <T extends { id: string }>(items: T[]): T[] => {
+    const usedIds = new Set<string>()
+    return items.map((item) => {
+      let id = item.id
+      while (!id || usedIds.has(id)) id = uid()
+      usedIds.add(id)
+      return id === item.id ? item : { ...item, id }
+    })
+  }
   const normalizeEvidence = (items: unknown, kind: EvidenceItem['kind'], fallbackItems: EvidenceItem[]) => Array.isArray(items)
-    ? items.map((item) => {
+    ? normalizeItemIds(items.map((item) => {
       const candidate = item && typeof item === 'object' ? item as Partial<EvidenceItem> : {}
       return {
         ...createEvidence(kind),
@@ -167,10 +181,10 @@ export function normalizeDecisionRecord(value: Partial<DecisionRecord>, index = 
           ? candidate.confidence as EvidenceItem['confidence']
           : kind === 'fact' ? 'high' : 'medium',
       }
-    })
+    }))
     : fallbackItems
   const normalizeOptions = (items: unknown) => Array.isArray(items)
-    ? items.map((item) => {
+    ? normalizeItemIds(items.map((item) => {
       const candidate = item && typeof item === 'object' ? item as Partial<DecisionOption> : {}
       return {
         ...createOption(),
@@ -183,7 +197,7 @@ export function normalizeDecisionRecord(value: Partial<DecisionRecord>, index = 
         risks: normalizeStrings(candidate.risks, ['']),
         chosen: candidate.chosen === true,
       }
-    })
+    }))
     : fallback.options
   return {
     ...fallback,
@@ -246,13 +260,18 @@ export function normalizeWorkspace(workspace: Workspace): Workspace {
   const normalized = source.map((decision, index) => normalizeDecisionRecord(decision, index))
   const usedIds = new Set<string>()
   let nextNumber = nextDecisionNumber(normalized)
+  const takeNextId = () => {
+    const id = `ADR-${String(nextNumber).padStart(4, '0')}`
+    nextNumber = nextNumber === Number.MAX_SAFE_INTEGER ? 1 : nextNumber + 1
+    return id
+  }
   const decisions = normalized.map((decision) => {
     if (!usedIds.has(decision.id)) {
       usedIds.add(decision.id)
       return decision
     }
-    let id = `ADR-${String(nextNumber++).padStart(4, '0')}`
-    while (usedIds.has(id)) id = `ADR-${String(nextNumber++).padStart(4, '0')}`
+    let id = takeNextId()
+    while (usedIds.has(id)) id = takeNextId()
     usedIds.add(id)
     return { ...decision, id }
   })

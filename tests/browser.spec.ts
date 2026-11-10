@@ -241,6 +241,35 @@ test('restores an accidentally deleted decision', async ({ page }) => {
   await expect(page.getByLabel('决策标题')).toHaveValue('使用本地优先方式构建 ADR 工作台')
 })
 
+test('imports oversized duplicate IDs without freezing and can create another decision', async ({ page }) => {
+  await page.goto('/')
+  const record = { ...createExampleDecision(), id: 'ADR-9007199254740992' }
+  record.options[1].id = record.options[0].id
+  await page.getByLabel('导入 WHYLOG JSON 工作区').setInputFiles({
+    name: 'large-ids.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      decisions: [record, record, record],
+      activeId: record.id,
+    })),
+  })
+  await expect(page.locator('.decision-row')).toHaveCount(3)
+  await page.getByLabel('方案 2 名称').fill('独立编辑的第二方案')
+  await expect(page.getByLabel('方案 1 名称')).toHaveValue(record.options[0].title)
+  await page.getByRole('button', { name: '选择此方案', exact: true }).click()
+  await expect(page.getByRole('button', { name: '已选择', exact: true })).toHaveCount(1)
+  await page.getByRole('button', { name: '新建决策', exact: true }).click()
+  await expect(page.getByLabel('决策标题')).toHaveValue('未命名决策')
+  await expect(page.locator('.decision-row')).toHaveCount(4)
+  await expect.poll(async () => page.evaluate(() => {
+    const workspace = JSON.parse(localStorage.getItem('whylog.workspace.v1') ?? '{}')
+    return workspace.decisions?.map((decision: { id: string }) => decision.id)
+  })).toEqual(['ADR-0003', record.id, 'ADR-0001', 'ADR-0002'])
+  await page.reload()
+  await expect(page.locator('.decision-row')).toHaveCount(4)
+})
+
 test('undoes a full-workspace import', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: '先看完整示例' }).click()

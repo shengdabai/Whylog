@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createExampleDecision, isReviewDue, normalizeWorkspace } from './decision'
+import { createExampleDecision, isReviewDue, nextDecisionNumber, normalizeWorkspace } from './decision'
 import type { Workspace } from '../types'
 
 describe('decision lifecycle compatibility', () => {
@@ -73,6 +73,59 @@ describe('decision lifecycle compatibility', () => {
     expect(workspace.decisions[0].id).toBe(first.id)
     expect(workspace.decisions[1].id).not.toBe(first.id)
   })
+
+  it('allocates safe numbers after imported IDs exceed integer precision', () => {
+    const record = createExampleDecision()
+    const decisions = ['ADR-0001', 'ADR-9007199254740991', 'ADR-9007199254740992', `ADR-${'9'.repeat(400)}`]
+      .map((id) => ({ ...record, id }))
+    expect(nextDecisionNumber(decisions)).toBe(2)
+    expect(nextDecisionNumber([{ ...record, id: 'ADR-0042' }])).toBe(43)
+    expect(nextDecisionNumber([])).toBe(1)
+  })
+
+  it('repairs duplicate and empty nested IDs without losing imported content', () => {
+    const record = createExampleDecision()
+    record.options = [
+      { ...record.options[0], id: 'same-option' },
+      { ...record.options[1], id: 'same-option' },
+      { ...record.options[1], id: '' },
+    ]
+    for (const kind of ['facts', 'assumptions'] as const) {
+      record[kind] = [record[kind][0], { ...record[kind][0], text: '第二项' }, { ...record[kind][0], id: '' }]
+    }
+    const workspace = normalizeWorkspace({ schemaVersion: 1, decisions: [record], activeId: record.id })
+    const normalized = workspace.decisions[0]
+    for (const key of ['options', 'facts', 'assumptions'] as const) {
+      const items = normalized[key]
+      expect(items).toHaveLength(record[key].length)
+      expect(new Set(items.map((item) => item.id)).size).toBe(items.length)
+      expect(items.every((item) => item.id.length > 0)).toBe(true)
+      expect(items[0].id).toBe(record[key][0].id)
+      expect(items.map(({ id: _id, ...content }) => content))
+        .toEqual(record[key].map(({ id: _id, ...content }) => content))
+    }
+    expect(normalizeWorkspace(workspace)).toEqual(workspace)
+  })
+
+  it.each(['9007199254740990', '9007199254740991', '9007199254740992', '9'.repeat(400)])(
+    'normalizes duplicate imported IDs at the numeric boundary: %s',
+    (number) => {
+      const record = { ...createExampleDecision(), id: `ADR-${number}` }
+      const workspace = normalizeWorkspace({
+        schemaVersion: 1,
+        decisions: [record, record, record, record],
+        activeId: record.id,
+      })
+      expect(new Set(workspace.decisions.map((decision) => decision.id)).size).toBe(4)
+      expect(workspace.activeId).toBe(record.id)
+      expect(workspace.decisions[0].id).toBe(record.id)
+      for (const decision of workspace.decisions.slice(1)) {
+        expect(Number.isSafeInteger(Number(decision.id.slice(4)))).toBe(true)
+      }
+      expect(normalizeWorkspace(workspace)).toEqual(workspace)
+      expect(Number.isSafeInteger(nextDecisionNumber(workspace.decisions))).toBe(true)
+    },
+  )
 })
 
 
